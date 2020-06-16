@@ -1,0 +1,636 @@
+---
+title: "Informe PEC-2 Datos ómicos"
+author: "Ivan Lacasa Mas"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    theme: united
+    toc: yes
+    toc_depth: 3
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  word_document:
+    toc: yes
+    toc_depth: '3'
+header-includes:
+- \usepackage{leading}
+- \leading{15pt}
+editor_options:
+  chunk_output_type: console
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+if(!require(BiocManager)) install.packages("BiocManager")
+if(!require(airway)) BiocManager::install("airway")
+if(!require(Rsamtools)) BiocManager::install("Rsamtools")
+if(!require(GenomicFeatures)) BiocManager::install("GenomicFeatures")
+if(!require(DESeq2)) BiocManager::install("DESeq2")
+if(!require(apeglm)) BiocManager::install("apeglm")
+if(!require(BiocParallel)) BiocManager::install("BiocParallel")
+if(!require(genefilter)) BiocManager::install("genefilter")
+if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+if(!require(RUVSeq)) BiocManager::install("RUVSeq")
+if(!require(sva)) BiocManager::install("sva")
+if(!require(Gviz)) BiocManager::install("Gviz")
+
+if(!require(magrittr)) install.packages("magrittr", dep=TRUE)
+if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+
+```
+# 1. Abstract
+
+La tiroides es una glándula pequeña con forma de mariposa, ubicada en la parte frontal del cuello, justo debajo de la nuez de Adán. Existen patologias asociadas a infiltraciones de linfocitos en esta glándula. El proyecto que presentamos es un análisis del RNA de este órgano, ya que otros autores han sugerido que puede haber genes desregulados en este tejido implicados en formacián de esta patologia. Este documento pretenge hallar dianas moleculares para que en un futuro se puedan encontrar tratamientos acordes.
+
+
+# 2. Objetivos
+
+El objetivo principal de este trabajo es comprobar una posible expresión diferencial. Este análisis se hará de los datos de ultrasecuenciación de tejidos pertenecientes a muestras de pacientes con y sin infiltraciones en poblaciones celulares tiroideas.
+
+
+# 3. Materiales y métodos
+
+Las muestras de este estudio han sido obtenidas del repositorio GTEx. Este repositorio contiene datos de expresión (RNA-seq) de 54 tejidos humanos. Nosotros en este caso nos focalizaremos en datos pertenecientes a muestras de tiroides en los que se compara tres tipos de infiltraciones medidos en un total de 292 muestras. Todas las muestras fueron secuenciadas por un secuenciador Illumina HiSeq2000 _paired_ _end_. 
+
+Los tres grupos analizados son los siguientes:
+
+* _Not_ _infiltrated_ _tissues_ (NIT): 236 muestras tiroideas sin infiltraciones.
+
+* _Small_ _focal_ _infiltrates_ (SFI): 42 muestras de tejido tiroideo con pequeñas pero localizadas infiltraciones de linfocitos.
+
+* _Extensive_ _lymphoid_ _infiltrates_ (ELI): 14 muestras de tejido tiroideo con una infiltración extensa de linfocitos.
+
+Los datos, con los que hemos trabajos, los hemos obtenido desde un archivo **counts.csv** que contiene el número de lecturas para cada gen en cada una de las muestra y **targets.csv** donde se encuentran los metadatos de cada una de las muestras.
+
+El análisis de expresión diferencial lo hemos realizado mediante la herramienta R/Bioconductor.
+
+El método de análisis seguido se ha basado en una _pipeline_ obtenida de **Alex** **Sánchez** **Paz**.
+
+El objetivo especifico fue encontrar los genes diferencialmente expresados entre las siguientes comparativas:
+
+* **Tejidos no infilatrados (NIT) vs. tejidos con pequeñas infiltraciones locales (SFI)**
+* **Tejidos no infiltrados (NIT) vs. tejidos con infiltraciones linfáticas extensas (ELI)**
+* **Tejidos con pequeñas infiltraciones locales (SFI) vs. tejidos con infiltraciones linfáticas extensas (ELI)**
+
+Para llevar a cabo esas comparaciones, hemos seleccionado 10 muestras al azar de cada uno de los tres grupos, 30 en total. A fin de trabajar con los mismos datos a lo largo de todo el proceso de preparación del informe hemos separado el _script_ de aletorización. Con este procedimiento, hemos evitado que cada vez que realicemos cambios y volvamos a ejecutar el archivo Rmd o ejecutemos un Knit para generar el fichero html, los datos seleccionados cambien y, por ende, las explicaciones e interpretaciones ya realizadas pasen a ser diferentes. Junto con este informe, adjuntaremos, para su evaluación, el fichero _Script_Seleccion_Aleatoria_Muestras_.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+# establecemos el directorio local de trabajo
+
+#setwd("/Users/ivan/Dropbox/LOCAL uic/UOC/MASTER/DATOS OMICOS/DATOS OMICOS 2019-2020/PEC-2 2020/RNA-seq/")
+
+```
+
+
+```{R ReadTargets, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+# leemos los ficheros
+
+targets <- read.csv2("./data/targets.csv", header = TRUE, sep = ",")
+counts <- read.csv2("./data/counts.csv", header = TRUE, sep = ";")
+
+```
+
+
+#### 3.1 Lectura de la matriz de contaje
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+# leemos los archivos
+
+counts_new <- read.table("./data/ncte.csv", sep = ",", header = TRUE)
+ensembl <- read.table("./data/genes.csv", sep = ",", header = TRUE)
+
+subtargets <- readRDS("./data/subtargets.rds")
+
+counts_newt <- cbind(ensembl,counts_new)
+
+head(counts_newt, 3)
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+# coldata <- colData(counts_new)
+
+```
+
+Cargados los archivos que se nos han adjuntado junto con el enunciado de la PEC, lo primero que hacemos es construir el objeto DESeqDataSet a partir de la matriz de conteos y la tabla de información sobre la muestra. 
+
+Por la información que hemos obtenido mediante una búsqueda sistemática de articulos podemos definir el grupo NIT (tejido sin infiltraciones) como "control", ya que todas las células que han sido secuenciadas tienen una misma expresión, la que se origina en un tiroides no patogénico. Por otro lado, los tejidos con infiltraciones de linfocitos (ELI y SFI) son tejidos patogénicos; con ellos vamos a comparar NIT. Sin embargo, como queremos hacer un análisis completo procederemos a hacer una tercera comparación de ELI vs SFI, tal como hemos explicado anteriormente.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+subtargets$Group %<>% relevel("NIT")
+
+dds <- DESeqDataSetFromMatrix(countData = counts_new,#countdata
+                                  colData = subtargets, #coldata
+                                  design = ~ Group)
+dds
+
+```
+
+
+### 3.2 Análisis exploratorio y visualización
+
+#### 3.2.1 Pre-filtraje del dataset
+
+Uno de los primeros pasos para que este sea un análisis ágil, rápido y dinámico es eliminar todos los genes que no tienen expresión en ninguna de las muestras. Esto se hace porque, al no haber encontrado lecturas en estos genes, seguir con ellos en el análisis podria provocar una generación de datos con una expresión diferencial nula. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+nrow(dds)
+dds <- dds[ rowSums(counts(dds)) > 1, ] #Filtro las filas que contienen ceros
+nrow(dds)
+
+```
+
+datos sin filtrar | datos filtrados
+-- | -- | -- | --
+56.202 | 43.824 
+
+#### 3.2.2 Tranformación VST y rlog
+
+Existen muchos métodos estadisticos comunes para el análisis exploratorio de datos multidimensionales, por ejemplo el clustering y el análisis de los componentes principales (PCA), los cuales funcionan mejor para los datos que tienen el mismo rango de varianza en diferentes rangos de los valores medios. Por otro lado, cuando la cantidad de varianza esperada es aproximadamente la misma en diferentes valores medios se dice que los datos son homoskedásticos. Sin embargo, en el caso de los recuentos de RNA-seq, la varianza esperada crece con la media.
+
+A fin de estabilizar esa varianza usamos DESeq2 para transformar los datos de contaje. Ofreciéndonos dos opciones: VST y rlog. Para los genes con contajes altos, tanto con VST como con rlog obtendremos un resultado similar al que obtenemos con la transformación ordinaria log2 de los contajes normalizados. Sin embargo, para los genes con contajes más bajos, los valores son forzados hacia un valor medio.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+vsd <- vst(dds, blind = TRUE) #estimamos la dispersión
+head(assay(vsd), 3)
+colData(vsd) #metadata del archivo
+
+gc()
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+rld <- rlog(dds, blind = TRUE)
+head(assay(rld), 3)
+
+gc()
+
+```
+
+Para mostrar el efecto de la transformación, en la siguiente figura representamos la primera muestra contra la segunda, primero simplemente usando la función log2, y luego usando los valores VST y rlog-transformados. 
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library("dplyr")
+library("ggplot2")
+
+dds <- estimateSizeFactors(dds)
+
+df <- bind_rows(
+  as_data_frame(log2(counts(dds, normalized=TRUE)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_data_frame(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_data_frame(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+  
+colnames(df)[1:2] <- c("x", "y")  
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.width=7, fig.cap="Figura 1 Scatterplot. Se representan las tres transforamciones log2, VST y Rlog. Esquina inferior izquierda contajes inferiores, esquinar superior derecha contajes superiores"}
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation) 
+```
+
+Como puede comprobarse en los tres diagramas de dispersión (usando la transformación log2 de los contajes normalizados, usando rlog y usando VST), rlog enseña unos datos mejores de distribución. Sin embargo tiene que tenerse en cuenta que el procesamiento puede ser muy lento. Mientras que rlog está aproximadamente en la misma escala que los conteos log2, VST tiene un desplazamiento hacia arriba para los valores más pequeños. Podemos también ver (figura 1 Scatterplot) cómo los genes con recuentos bajos (esquina inferior izquierda) parecen ser excesivamente variables en la escala logaritmica ordinaria, mientras que la VST y el rlog comprimen las diferencias para los genes con recuentos bajos, por lo que los datos proporcionan poca información sobre su expresión diferencial.
+
+#### 3.2.3 Distancia entre las muestras
+
+Un primer paso útil en un análisis RNA-seq es evaluar la similitud general entre las muestras. Con este método podemos saber qué muestras son similares y cuáles son diferentes entre si.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+sampleDists <- dist(t(assay(vsd)))
+sampleDists
+
+```
+
+Visualizamos las distancias en un mapa de calor, usando la función pheatmap.
+
+Para graficar la matriz de distancias proporcionamos manualmente los sampleDists al argumento clustering_distance de la función pheatmap. De lo contrario, la función pheatmap supondria que la matriz contiene los valores de los datos propiamente dichos, y calcularia las distancias entre las filas/columnas de la matriz de distancia, lo cual no es deseable.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.width=6, fig.cap="Figura 2 Mapa de calor. Se pueden ver las distancias entre las diferencias muestras. Las distintas tonalidades de azul del gráfico indican la distancia entre las muestras a mayor tonalidad de azul, menor distancia"}
+
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+#rownames(sampleDistMatrix) <- paste( vsd$Group, sep = " - " )
+rownames(sampleDistMatrix) <- paste( vsd$Group, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+```
+
+#### 3.2.4 PCA plot
+
+Con los mismos datos que se generó el mapa de calor (VST), generaremos el del PCA. Otorgándole un color propio a cada población muestral.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.width=5, fig.width=6, fig.cap="Figura 3 Principal components analisys. Visualización de los componentes principales de los datos procedentes de VSD"}
+
+plotPCA(vsd, intgroup = "Group")
+
+```
+
+
+### 3.3 Análisis de la expresión diferencial
+
+Al haber realizado especificamente un diseño experimental (**DESeqDataSet**), podemos ejecutar la _pipeline_ de expresión diferencial de cada una de las comparaciones sobre los contajes en bruto, gracias a la función DESeq. Utilizamos este programa, ya que usa un modelo basado en una distribución binomial negativa, este trata las dispersiones como si fueran parámetros conocidos lo que conduce a test estadisticos más arriesgados.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+dds <- DESeq(dds, parallel =TRUE)
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsNIT <- results(dds, contrast=c("Group","ELI","NIT"))
+comparativa_ELIvsNIT
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_SFIvsNIT <- results(dds, contrast=c("Group","SFI","NIT"))
+comparativa_SFIvsNIT
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsSFI <- results(dds, contrast=c("Group","ELI","SFI"))
+comparativa_ELIvsSFI
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+mcols(comparativa_ELIvsNIT, use.names = TRUE)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+mcols(comparativa_SFIvsNIT, use.names = TRUE)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+mcols(comparativa_ELIvsSFI, use.names = TRUE)
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+summary(comparativa_ELIvsNIT)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+summary(comparativa_SFIvsNIT)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+summary(comparativa_ELIvsSFI)
+
+```
+
+
+A la hora de observar la expresión diferencial, podemos ser estrictos y ver de dos formas qué conjunto de genes se consideran significativos:
+
+1. reducir el umbral de la tasa de **falsos descubrimientos** (padj)
+2. aumentar el umbral de log2 **fold change** desde 0 usando el argumento lfcThreshold de resultados.
+
+En nuestro caso, usaremos un **log2 fold change** mayor de 1 y padj de 0,1.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsNIT.05 <- results(dds, alpha = 0.05) 
+table(comparativa_ELIvsNIT.05$padj < 0.11)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsNIT_LFC1 <- results(dds, lfcThreshold=1) 
+table(comparativa_ELIvsNIT_LFC1$padj < 0.1)
+
+```
+
+Por lo tanto, si consideramos aceptable una fracción del 10% de falsos positivos, podemos considerar significativos todos los genes con un valor p adj por debajo del 10% = 0,1. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+sum(comparativa_ELIvsNIT$padj < 0.1, na.rm=TRUE)
+
+```
+
+#### 3.4.3 Clusterización de los genes
+
+Normalmente cuando se realiza una clusterización sólo se agrupa un subconjunto de aquellos genes que tienen mayor variabilidad. Por lo tanto, de nuestros análisis hemos seleccionado los 20 genes con mayor varianza en las muestras (de acuerdo a los datos de VST).
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.cap="Figura 4 Mapa de calor. El grupo NIT viene representado por el color verde, el grupo ELI por el rosa y el grupo SFI por el azul. La sobreexpresión se representa con un color rojo y la represión mediante un color azul"}
+
+library("genefilter")
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 20)
+
+mat  <- assay(vsd)[topVarGenes, ]
+mat  <- mat - rowMeans(mat)
+anno <- rownames(colData(vsd))
+anno1 <- as.data.frame(colData(vsd)[,"Group"])
+rownames(anno1) <- anno
+
+
+pheatmap(mat, annotation_col=anno1, cellwidth = 8, cellheight = 10, fontsize = 6, show_colnames = FALSE, cluster_rows=FALSE, annotation_legend = FALSE)
+
+```
+
+### 3.5 Anotación y exportación de los resultados
+
+Nuestra tabla de resultados hasta ahora sólo contiene las identificaciones de los genes de Ensembl, pero los nombres de genes convencionales pueden ser más informativos para la interpretación. Los paquetes de anotaciones de los bioconductores ayudan a mapear varios esquemas de identificación entre si.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+library("AnnotationDbi")
+columns(org.Hs.eg.db)
+
+```
+
+Usamos la función mapIds para añadir columnas individuales a nuestra tabla de resultados, habiendo proporcionado los nombres de las filas de nuestra tabla de resultados como clave, y especificamos que keytype=ENSEMBL. El argumento de columna le dice a la función mapIds qué información queremos, y el argumento multiValores le dice a la función qué hacer si hay múltiples valores posibles para un solo valor de entrada. Pedimos que nos devuelva el primero que aparece en la base de datos. Para añadir el simbolo del gen y el ID de Entrez, invocamos dos veces a mapIds.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsNIT$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(comparativa_ELIvsNIT),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+comparativa_ELIvsNIT$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(comparativa_ELIvsNIT),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered <- comparativa_ELIvsNIT[order(comparativa_ELIvsNIT$pvalue),]
+head(resOrdered)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+# comparativa SFI vs NIT
+
+comparativa_SFIvsNIT$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(comparativa_SFIvsNIT),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+comparativa_SFIvsNIT$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(comparativa_SFIvsNIT),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered_SFIvsNIT <- comparativa_SFIvsNIT[order(comparativa_SFIvsNIT$pvalue),]
+head(resOrdered_SFIvsNIT)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+# comparativa ELI vs SFI
+
+comparativa_ELIvsSFI$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(comparativa_ELIvsSFI),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+comparativa_ELIvsSFI$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(comparativa_ELIvsSFI),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered_ELIvsSFI <- comparativa_ELIvsSFI[order(comparativa_ELIvsSFI$pvalue),]
+head(resOrdered_ELIvsSFI)
+
+```
+
+
+#### 3.5.1 Exportación de los resultados
+
+Guardamos la tabla de resultados en un archivo CSV y con reportingtools se creará un html.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+resOrderedDF <- as.data.frame(resOrdered)
+write.csv(resOrderedDF, file = "results2.csv")
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+library("ReportingTools")
+htmlRep <- HTMLReport(shortName="report", title="My report",
+                      reportDirectory=".")
+publish(resOrderedDF, htmlRep)
+url <- finish(htmlRep)
+browseURL(url)
+
+```
+
+
+# 4. Resultados
+
+Con toda la metodologia realizada en este trabajo y la información encontrada en los articulos cientificos subyacentes podemos definir las caracteristicas de cada una de las poblaciones celulares tiroideas con las que nos encontramos.
+
+En un principio, con el mapa de calor (Figura 2 Mapa de calor) podemos observar cómo nuestras muestras y grupos se organizan en dos grupos bien diferenciados. En el primero (cluster de la derecha, sección izquierda), se concentran todas las muestras de ELI. Por contra, las muestras de SFI y NIT están repartidas entre el primer y el segundo cluster, siendo visualmente aparente la semejanza entre las primeras muestras (arriba) y las últimas (abajo) (donde están la mayoria de SFI y NIT).
+
+Este perfil antes indicado en el mapa de calor también lo encontramos en los resultados de la PCA (Figura 3 Principal component analysis). Viendo claramente una disociación entre el grupo ELI y el compuesto por los grupos NIT y SFI, los cuales están mas aparejados.
+
+Después de las visualizaciones, procedemos a definir los genes significativos diferencialmente más expresados contando con las diferentes comparativas. Los datos aparecerán en un lista con los siguientes factores: 
+
+baseMean es el promedio de los valores de contaje normalizados, divididos por los factores de tamaño, tomados sobre todas las muestras en el DESeqDataSet.
+
+log2FoldChange es la estimación del tamaño del efecto. Nos dice cuánto parece haber cambiado la expresión del gen debido a las diferentes comparaciones con las muestras.
+
+lfcSE es la estimación del error estándar para la estimación log2 del **fold change**.
+
+p value indica la probabilidad de que un cambio de expresión sea originado por azar, de acuerdo a la hipótesis nula descrita.
+
+padj, DESeq2 utiliza el ajuste de Benjamini-Hochberg (BH) (Benjamini y Hochberg 1995) como se implementa en la función p.adjust de R.
+
+Genes más sobreepresados cuando comparamos ELI vs NIT:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+comparativa_ELIvsNIT_Sig <- subset(comparativa_ELIvsNIT, padj < 0.1)
+head(comparativa_ELIvsNIT_Sig[ order(comparativa_ELIvsNIT_Sig$log2FoldChange), ])
+
+```
+
+Genes más reprimidos cuando comparamos ELI vs NIT:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+head(comparativa_ELIvsNIT_Sig[ order(comparativa_ELIvsNIT_Sig$log2FoldChange, decreasing = TRUE), ])
+
+```
+
+## 4.1 Otras comparaciones
+
+### 4.1.1 Comparación SFI vs NIT
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_SFIvsNIT.05 <- results(dds, alpha = 0.05) 
+table(comparativa_SFIvsNIT.05$padj < 0.1)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_SFIvsNIT_LFC1 <- results(dds, lfcThreshold=1) 
+table(comparativa_SFIvsNIT_LFC1$padj < 0.1)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+sum(comparativa_SFIvsNIT$padj < 0.1, na.rm=TRUE)
+
+```
+
+Genes más sobreepresados cuando comparamos SFI vs NIT:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+comparativa_SFIvsNIT_Sig <- subset(comparativa_SFIvsNIT, padj < 0.1)
+head(comparativa_SFIvsNIT_Sig[ order(comparativa_SFIvsNIT_Sig$log2FoldChange), ])
+
+```
+
+Genes más reprimidos cuando comparamos ELI vs NIT:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+head(comparativa_SFIvsNIT_Sig[ order(comparativa_SFIvsNIT_Sig$log2FoldChange, decreasing = TRUE), ])
+
+```
+
+### 4.1.2 Comparación ELI vs SFI
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsSFI.05 <- results(dds, alpha = 0.05) 
+table(comparativa_ELIvsSFI.05$pvalue < 0.01)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+comparativa_ELIvsSFI_LFC1 <- results(dds, lfcThreshold=1) 
+table(comparativa_ELIvsSFI_LFC1$padj < 0.1)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+
+sum(comparativa_ELIvsSFI$padj < 0.1, na.rm=TRUE)
+
+```
+
+Genes más sobreepresados cuando comparamos SFI vs ELI:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+comparativa_ELIvsSFI_Sig <- subset(comparativa_ELIvsSFI, padj < 0.1)
+head(comparativa_ELIvsSFI_Sig[ order(comparativa_ELIvsSFI_Sig$log2FoldChange), ])
+
+```
+
+Genes más reprimidos cuando comparamos SFI vs ELI:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+head(comparativa_ELIvsSFI_Sig[ order(comparativa_ELIvsSFI_Sig$log2FoldChange, decreasing = TRUE), ])
+
+```
+
+## 4.2 Tabla resumen
+
+n genes expresados | Sobreexpresados | Reprimidos
+-- | -- | --
+ELIvsNIT | 28 | 31
+SFIvsNIT | 4 | 0
+SFIvsELI | 15 | 23
+
+## 4.2 Graficación de los resultados
+
+Otra forma de ver estos resultados es mediante un mapa de calor. Aunque los mapas de calor pueden utilizarse para visualizar los valores de expresión sin un orden especifico, se ha preferido dibujarlo haciendo un agrupamiento de los 20 genes más sobreexpresados. Este  mapa de calor (Figura 4 Mapa de calor) muestra la existencia de dos grandes grupos, como venia pasando anteriormente. En el grupo de la izquierda se clusterizan las muestras de los grupos NIT y SFI y se ve una general represión, mientras que en el grupo de la derecha lo que abudan son muestras del grupo ELI y la sobrerexpresión es mayor.
+
+Una última forma y rápida de visualizar el resultado de los contajes de un gen (topgene=IL20RB) en particular es usar la función plotCounts que toma como argumentos el DESeqDataSet, un nombre de gen, y el grupo sobre el que se aplican los contajes.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.width=5, fig.height=4, fig.cap="Figura 5 Besswarm plot. Visualización de densidad de los datos en cada punto, al tiempo que muestra cada punto de datos individualmente"}
+
+# comparativa ELI vs NIT
+
+topGene <- rownames(comparativa_ELIvsNIT)[which.min(comparativa_ELIvsNIT$pvalue)]
+
+library("ggbeeswarm")
+
+geneCounts <- plotCounts(dds, gene = topGene, intgroup = "Group",
+                         returnData = TRUE)
+ggplot(geneCounts, aes(x = Group, y = count, color = Group, group = Group)) +
+  scale_y_log10() + geom_point(size = 3) + geom_line()
+
+```
+
+# 5. Discusión
+
+Con todos los datos obtenidos, podemos reafirmar lo identificado mediante la búsqueda sistemática de articulos, en los que pudimos definir el grupo NIT (tejido sin infiltraciones) como "control", al ser un tiroides no patogénico. 
+
+Adicionalmente, observamos que los tejidos con infiltraciones de linfocitos extensos tienen un perfil parecido al grupo NIT ("control"). Esto puede ser originado porque en SFI los linfocitos están extendidos en todo el tejido tiroideo, cuando se obtuvieron las células patogénicas no fueron disociadas del tejido aledaño, con la consiguiente similitud al tejido NIT. 
+
+Por otra parte, vemos una clara diferencia entre las poblaciones NIT y ELI. Esto puede ser debido a que el tejido ELI se encuentra focalizado y es más fácil de obtener muestras de él sin contaminante de otros tejidos proximos.
+
+Un problema bastante agudo en este tipo de trabajos es no contar con información previa, ya que, aunque el "rol" sea puramente técnico, no se puede hacer un análisis de calidad. Como hemos aprendido en la asignatura, el bioinformático debe estar en todos los pasos del estudio y no sólo considerarse a si mismo como ejecutador de una pipeline.
+
+
+# 6. Agradecimientos
+
+Gracias a Alex Sanchez Paz por su pipeline y a la UOC por hacer este trabajo posible.

@@ -1,0 +1,107 @@
+---
+title: "Script_Seleccion_Aleatoria_Muestras"
+author: "Ivan Lacasa Mas"
+date: "6/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE}
+if(!require(BiocManager)) install.packages("BiocManager")
+if(!require(airway)) BiocManager::install("airway")
+if(!require(Rsamtools)) BiocManager::install("Rsamtools")
+if(!require(GenomicFeatures)) BiocManager::install("GenomicFeatures")
+if(!require(DESeq2)) BiocManager::install("DESeq2")
+if(!require(apeglm)) BiocManager::install("apeglm")
+if(!require(BiocParallel)) BiocManager::install("BiocParallel")
+if(!require(genefilter)) BiocManager::install("genefilter")
+if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+if(!require(RUVSeq)) BiocManager::install("RUVSeq")
+if(!require(sva)) BiocManager::install("sva")
+if(!require(Gviz)) BiocManager::install("Gviz")
+
+if(!require(magrittr)) install.packages("magrittr", dep=TRUE)
+if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+
+```
+
+```{r}
+
+# establecemos el directorio local de trabajo
+
+#setwd("/Users/ivan/Dropbox/LOCAL uic/UOC/MASTER/DATOS OMICOS/DATOS OMICOS 2019-2020/PEC-2 2020/RNA-seq/")
+
+```
+
+Cargamos los archivos que se nos han adjuntado junto con el enunciado de la PEC.
+
+```{R ReadTargets, echo=FALSE, results='hide'}
+
+# leemos los ficheros
+
+targets <- read.csv2("./data/targets.csv", header = TRUE, sep = ",")
+counts <- read.csv2("./data/counts.csv", header = TRUE, sep = ";")
+
+```
+
+A continuación, escogemos 10 muestras al azar.
+
+```{r}
+
+#seleccionamos al azar 10 muestras de cada grupo
+
+subtargets <- targets %>% group_by(Group) %>% sample_n(10)
+
+subtargets1 <- as.data.frame(subtargets)
+
+rownames(subtargets1) <- as.character(unlist(subtargets$Sample_Name))
+
+saveRDS(subtargets, "./data/subtargets.rds")
+
+```
+
+Y creamos un nuevo archivo de counts escogidos, pero esta vez con los mismos sample names que subtargets (que son los targets con las 10 muestras elegidas al azar).
+
+```{r}
+
+#creamos un nuevo archivo con los counts escogidos
+
+head(counts,3)
+
+counts$X<-gsub("\\..*", "", counts$X, fixed = FALSE)
+
+rownames(counts) <- counts$X
+
+counts_new <- counts[,-1]
+
+cn <- as.data.frame(t(counts_new))
+
+rownames(cn) <- gsub("[.]", "-", rownames(cn))
+
+new_counts <- merge(subtargets1, cn, by="row.names")
+
+row.names(new_counts) <- new_counts$Sample_Name
+
+nct <- as.data.frame(t(new_counts))
+
+ncte <- nct[-c(1:10),]
+
+write.table(ncte, file="./data/ncte.csv", sep=",")
+
+genes <- as.data.frame(counts[,1])
+
+colnames(genes) <- "Ensembl"
+
+write.table(genes, file="./data/genes.csv")
+
+```
+
